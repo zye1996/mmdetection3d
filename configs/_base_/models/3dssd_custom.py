@@ -16,7 +16,7 @@ model = dict(
         sa_cfg=dict(
             type='PointSAModuleMSG',
             pool_mod='max',
-            use_xyz=False,
+            use_xyz=True,
             normalize_xyz=False)),
     bbox_head=dict(
         type='SSD3DHead',
@@ -39,7 +39,9 @@ model = dict(
             norm_cfg=dict(type='BN2d', eps=1e-3, momentum=0.1),
             use_xyz=True,
             normalize_xyz=False,
-            bias=True),
+            bias=True,
+            gconv=False
+        ),
         pred_layer_cfg=dict(
             in_channels=1536,
             shared_conv_channels=(512, 128),
