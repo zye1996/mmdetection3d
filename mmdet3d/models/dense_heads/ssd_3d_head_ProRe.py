@@ -83,7 +83,7 @@ class ProRe(torch.nn.Module):
 
         P = vote_points.unsqueeze(1).repeat((1, num_point, 1, 1)) - \
             vote_points.unsqueeze(2).repeat((1, 1, num_point, 1))
-        P = P.permute(0, 3, 1, 2)
+        P = P.permute(0, 3, 1, 2).contiguous()
         P = self.conv_P(P).squeeze(2)
 
         features = self.conv_vertex(vote_feats.transpose(1, 2)).transpose(1, 2) + vote_feats
