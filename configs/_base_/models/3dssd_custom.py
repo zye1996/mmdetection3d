@@ -19,7 +19,7 @@ model = dict(
             use_xyz=True,
             normalize_xyz=False)),
     bbox_head=dict(
-        type='SSD3DHead',
+        type='SSD3DHead_ProRe',
         in_channels=256,
         vote_module_cfg=dict(
             in_channels=256,
@@ -40,10 +40,14 @@ model = dict(
             use_xyz=True,
             normalize_xyz=False,
             bias=True,
-            gconv=False
+        ),
+        prop_reasoning_cfg=dict(
+            in_channels=1536,
+            out_channels=512,
+            num_points=256
         ),
         pred_layer_cfg=dict(
-            in_channels=1536,
+            in_channels=512,
             shared_conv_channels=(512, 128),
             cls_conv_channels=(128, ),
             reg_conv_channels=(128, ),

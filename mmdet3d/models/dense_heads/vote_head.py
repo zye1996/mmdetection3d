@@ -195,6 +195,7 @@ class VoteHead(nn.Module):
         vote_aggregation_ret = self.vote_aggregation(**aggregation_inputs)
         aggregated_points, features, aggregated_indices = vote_aggregation_ret
 
+
         results['aggregated_points'] = aggregated_points
         results['aggregated_features'] = features
         results['aggregated_indices'] = aggregated_indices

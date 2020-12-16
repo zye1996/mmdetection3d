@@ -53,7 +53,8 @@ class PointSAModuleMSG(nn.Module):
                  use_xyz: bool = True,
                  pool_mod='max',
                  normalize_xyz: bool = False,
-                 bias='auto'):
+                 bias='auto',
+                 gconv=True):
         super().__init__()
 
         assert len(radii) == len(sample_nums) == len(mlp_channels)
@@ -73,6 +74,7 @@ class PointSAModuleMSG(nn.Module):
         else:
             raise NotImplementedError('Error type of num_point!')
 
+        self.sample_nums = sample_nums
         self.pool_mod = pool_mod
         self.groupers = nn.ModuleList()
         self.mlps = nn.ModuleList()
@@ -81,6 +83,9 @@ class PointSAModuleMSG(nn.Module):
 
         self.points_sampler = Points_Sampler(self.num_point, self.fps_mod_list,
                                              self.fps_sample_range_list)
+
+        if gconv:
+            self.mlps_offset = nn.ModuleList()
 
         for i in range(len(radii)):
             radius = radii[i]
@@ -101,8 +106,13 @@ class PointSAModuleMSG(nn.Module):
             self.groupers.append(grouper)
 
             mlp_spec = mlp_channels[i]
+            if gconv:
+                mlp_spec[0] = 2*mlp_spec[0]
             if use_xyz:
-                mlp_spec[0] += 3
+                if gconv:
+                    mlp_spec[0] += 6
+                else:
+                    mlp_spec[0] += 3
 
             mlp = nn.Sequential()
             for i in range(len(mlp_spec) - 1):
@@ -114,9 +124,21 @@ class PointSAModuleMSG(nn.Module):
                         kernel_size=(1, 1),
                         stride=(1, 1),
                         conv_cfg=dict(type='Conv2d'),
-                        act_cfg=dict(type='LeakyReLU', negative_slope=0.2),
+                        act_cfg=dict(type='ReLU'),
                         norm_cfg=norm_cfg,
                         bias=bias))
+            if gconv:
+                self.mlps_offset.append(
+                    ConvModule(
+                        3,
+                        mlp_spec[-1],
+                        kernel_size=(1, 1),
+                        stride=(1, 1),
+                        conv_cfg=dict(type='Conv2d'),
+                        act_cfg=dict(type='ReLU'),
+                        norm_cfg=norm_cfg,
+                        bias=bias))
+
             self.mlps.append(mlp)
 
     def forward(
@@ -156,12 +178,33 @@ class PointSAModuleMSG(nn.Module):
             indices = self.points_sampler(points_xyz, features)
             new_xyz = gather_points(xyz_flipped, indices).transpose(
                 1, 2).contiguous() if self.num_point is not None else None
+            # (B, C, nsample)
+            new_center_feature = gather_points(features, indices)
+            new_center_feature_withxyz = torch.cat((new_xyz.transpose(1, 2), new_center_feature), dim=1)
 
         for i in range(len(self.groupers)):
             # (B, C, num_point, nsample)
             new_features = self.groupers[i](points_xyz, new_xyz, features)
-            # (B, mlp[-1], num_point, nsample)
-            new_features = self.mlps[i](new_features)
+            if target_xyz is None:
+                neighbor_xyz_offset = new_features[:, :3, ...]  # (B, 3, num_point, nsample)
+                neighbor_xyz_offset = new_xyz.transpose(1, 2).unsqueeze(-1).repeat((1, 1, 1, self.sample_nums[i])) \
+                                      - neighbor_xyz_offset  # (B, 3, num_point, nsample)
+
+
+                # (B, C, num_point, 1)
+                new_center_feature_withxyz_ = new_center_feature_withxyz.unsqueeze(-1)
+                # (B, C, num_point, nsample)
+                new_center_feature_withxyz_ = new_center_feature_withxyz_.repeat((1, 1, 1, self.sample_nums[i]))
+                # (B, 2*C, num_point, nsample)
+                # new_features_ = new_features.detach()
+                new_features = new_features - new_center_feature_withxyz_
+                new_features = torch.cat((new_features, new_center_feature_withxyz_), dim=1)
+                # print(new_features_.shape, new_center_feature_.shape)
+                # (B, mlp[-1], num_point, nsample)
+                new_features = self.mlps_offset[i](neighbor_xyz_offset) * self.mlps[i](new_features)
+            else:
+                new_features = self.mlps[i](new_features)
+
             if self.pool_mod == 'max':
                 # (B, mlp[-1], num_point, 1)
                 new_features = F.max_pool2d(
@@ -175,7 +218,6 @@ class PointSAModuleMSG(nn.Module):
 
             new_features = new_features.squeeze(-1)  # (B, mlp[-1], num_point)
             new_features_list.append(new_features)
-
         return new_xyz, torch.cat(new_features_list, dim=1), indices
 
 
