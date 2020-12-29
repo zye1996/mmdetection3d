@@ -72,3 +72,8 @@ def test_circle_nms():
     keep = circle_nms(boxes.numpy(), 0.175)
     expected_keep = [1, 2, 3, 4, 5, 6, 7, 8, 9]
     assert np.all(keep == expected_keep)
+
+
+if __name__ == "__main__":
+    test_circle_nms()
+    test_aligned_3d_nms()

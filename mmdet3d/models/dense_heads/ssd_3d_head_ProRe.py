@@ -21,7 +21,7 @@ class ProRe(torch.nn.Module):
                  out_channels,
                  num_points=-1,
                  conv_cfg=dict(type='Conv1d'),
-                 norm_cfg=dict(type='BN1d'),
+                 norm_cfg=None,
                  act_cfg=dict(type='ReLU'),
                  ):
         super(ProRe, self).__init__()
@@ -56,7 +56,7 @@ class ProRe(torch.nn.Module):
             (num_points, 1),
             padding=0,
             conv_cfg=dict(type='Conv2d'),
-            norm_cfg=dict(type='BN2d'),
+            norm_cfg=None,
             act_cfg=act_cfg,
             bias=True,
             inplace=True

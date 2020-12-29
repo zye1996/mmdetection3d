@@ -73,7 +73,7 @@ train_cfg = dict(
 test_cfg = dict(
     nms_cfg=dict(type='nms', iou_thr=0.1),
     sample_mod='spec',
-    score_thr=0.0,
+    score_thr=0,
     per_class_proposal=True,
     max_output_num=100)
 

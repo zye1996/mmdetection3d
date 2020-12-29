@@ -1,8 +1,10 @@
 import torch
+import numpy as np
 from mmcv.ops.nms import batched_nms
 from mmcv.runner import force_fp32
 from torch.nn import functional as F
 
+from mmdet3d.core.bbox.iou_calculators import bbox_overlaps_3d
 from mmdet3d.core.bbox.structures import (DepthInstance3DBoxes,
                                           LiDARInstance3DBoxes,
                                           rotation_3d_in_axis)
@@ -444,6 +446,68 @@ class SSD3DHead(VoteHead):
 
         return results
 
+    def multiclass_nms_single_uncertainty(self, obj_scores, sem_scores, bbox, points,
+                              input_meta):
+        num_bbox = bbox.shape[0]
+        bbox = input_meta['box_type_3d'](
+            bbox.clone(),
+            box_dim=bbox.shape[-1],
+            with_yaw=self.bbox_coder.with_rot,
+            origin=(0.5, 0.5, 1.0))
+
+        if isinstance(bbox, LiDARInstance3DBoxes):
+            box_idx = bbox.points_in_boxes(points)
+            box_indices = box_idx.new_zeros([num_bbox + 1])
+            box_idx[box_idx == -1] = num_bbox
+            box_indices.scatter_add_(0, box_idx.long(),
+                                     box_idx.new_ones(box_idx.shape))
+            box_indices = box_indices[:-1]
+            nonempty_box_mask = box_indices >= 0
+        elif isinstance(bbox, DepthInstance3DBoxes):
+            box_indices = bbox.points_in_boxes(points)
+            nonempty_box_mask = box_indices.T.sum(1) >= 0
+        else:
+            raise NotImplementedError('Unsupported bbox type!')
+
+        nonempty_bbox = bbox[nonempty_box_mask]
+        nonempty_obj_scores = obj_scores[nonempty_box_mask]
+        nonempty_sem_scores = sem_scores[nonempty_box_mask]
+
+        # sort by scores
+        idxes = np.argsort(-nonempty_obj_scores)
+        nonempty_bbox = nonempty_bbox[idxes]
+        nonempty_obj_scores = nonempty_obj_scores[idxes]
+        nonempty_sem_scores = nonempty_sem_scores[idxes]
+
+        keep_bboxes = np.ones_like(nonempty_obj_scores)
+        classes = np.argmax(nonempty_sem_scores, axis=1)
+
+        # perform nms
+        for i in range(nonempty_obj_scores.shape[0]-1):
+            if keep_bboxes[i]:
+                valid = keep_bboxes[(i+1):]
+                overlap = bbox_overlaps_3d(nonempty_bbox[i:i+1], nonempty_bbox[i+1:][valid])
+                # check over threshold
+                remove_overlap = np.logical_and(
+                    overlap > self.test_cfg.nms_cfg.iou_threshold, classes[(i+1):][valid] == classes[i])
+                overlaped_bboxes = np.concatenate(
+                    [nonempty_bbox[(i + 1):][valid][remove_overlap], nonempty_bbox[[i]]], axis=0)
+                boxes_mean = np.median(overlaped_bboxes, axis=0)
+                nonempty_bbox[i][:] = boxes_mean[:]
+                boxes_mean_overlap = bbox_overlaps_3d(boxes_mean, nonempty_bbox[(i+1):][valid][remove_overlap])
+                nonempty_obj_scores[i] += np.sum(
+                    nonempty_obj_scores[(i + 1):][valid][remove_overlap] * boxes_mean_overlap)
+                keep_bboxes[(i + 1):][valid] = np.logical_not(remove_overlap)  ##
+
+        idxes = np.where(keep_bboxes)
+        labels = classes[idxes]
+        score_selected = nonempty_obj_scores[idxes]
+        bbox_selected = nonempty_bbox[idxes]
+
+        return bbox_selected, score_selected, labels
+
+
+
     def multiclass_nms_single(self, obj_scores, sem_scores, bbox, points,
                               input_meta):
         """Multi-class nms in single batch.
@@ -458,6 +522,7 @@ class SSD3DHead(VoteHead):
         Returns:
             tuple[torch.Tensor]: Bounding boxes, scores and labels.
         """
+
         num_bbox = bbox.shape[0]
         bbox = input_meta['box_type_3d'](
             bbox.clone(),
@@ -480,6 +545,7 @@ class SSD3DHead(VoteHead):
             raise NotImplementedError('Unsupported bbox type!')
 
         corner3d = bbox.corners
+
         minmax_box3d = corner3d.new(torch.Size((corner3d.shape[0], 6)))
         minmax_box3d[:, :3] = torch.min(corner3d, dim=1)[0]
         minmax_box3d[:, 3:] = torch.max(corner3d, dim=1)[0]
